@@ -1,0 +1,18 @@
+[project]
+name = "wow"
+version = "0.1.0"
+description = "Wizard of Wor - Classic arcade game clone"
+authors = [
+    {name = "erksubasi", email = "erksubasi@gmail.com"},
+]
+dependencies = ["pygame>=2.6.1", "numpy>=2.4.0"]
+requires-python = "==3.11.*"
+readme = "README.md"
+license = {text = "MIT"}
+
+
+[tool.pdm]
+distribution = false
+
+[tool.pdm.scripts]
+game = "python wizard_of_wor.py"
