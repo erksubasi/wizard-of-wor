@@ -1,18 +1,31 @@
 [project]
-name = "wow"
-version = "0.1.0"
-description = "Wizard of Wor - Classic arcade game clone"
+name = "wizard-of-wor"
+version = "0.2.0"
+description = "Wizard of Wor - Classic arcade game clone with 2D neon, 3D first-person, and isometric 2.5D versions"
 authors = [
     {name = "erksubasi", email = "erksubasi@gmail.com"},
 ]
-dependencies = ["pygame>=2.6.1", "numpy>=2.4.0"]
+dependencies = ["pygame>=2.6.1", "numpy>=2.4.0", "ursina>=7.0.0"]
 requires-python = "==3.11.*"
 readme = "README.md"
 license = {text = "MIT"}
+keywords = ["game", "arcade", "pygame", "retro", "wizard-of-wor"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: End Users/Desktop",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
+    "Topic :: Games/Entertainment :: Arcade",
+]
 
+[project.urls]
+Homepage = "https://github.com/erksubasi/wizard-of-wor"
+Repository = "https://github.com/erksubasi/wizard-of-wor"
 
 [tool.pdm]
 distribution = false
 
 [tool.pdm.scripts]
 game = "python wizard_of_wor.py"
+game-3d = "python wizard_of_wor_3d.py"
+game-iso = "python wizard_of_wor_iso.py"
