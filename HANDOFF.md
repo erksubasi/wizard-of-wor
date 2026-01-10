@@ -8,6 +8,8 @@ A Python/Pygame clone of the classic 1980 Midway arcade game "Wizard of Wor" wit
 2. **3D First-Person** (`wizard_of_wor_3d.py`) - Experimental Ursina engine first-person view
 3. **Isometric 2.5D** (`wizard_of_wor_iso.py`) - Axonometric view with mouse-controlled camera rotation
 
+**Latest update:** Isometric Ursina version now uses textures cropped from `assets/images/underwater_maze_assets.png` for the floor, walls, and the full-scene background.
+
 ## Quick Start
 
 ```bash
@@ -26,6 +28,7 @@ wizard-of-wor/
 ├── wizard_of_wor_3d.py    # 3D Ursina version
 ├── wizard_of_wor_iso.py   # Isometric 2.5D version (~1340 lines)
 ├── assets/
+│   ├── images/            # Underwater art assets and derived textures
 │   └── sounds/            # Sound effects (.wav files)
 ├── pyproject.toml         # PDM project config
 ├── CLAUDE.md              # AI assistant instructions
@@ -37,11 +40,17 @@ wizard-of-wor/
 
 ## ⚠️ OPEN PROBLEMS
 
-### � ONGOING: Isometric Projection Distortion During Camera Rotation
+See sections below for current open issues:
+1. **Ursina "plane" Model Not Rendering** - macOS-specific? Workaround: use "quad" with rotation
+2. **window.color Not Applied** - Background stays white
 
-**Status:** Partially Fixed - Visual distortion remains  
-**File:** [wizard_of_wor_iso.py](wizard_of_wor_iso.py)  
-**Severity:** Medium - Game is playable but has visual artifacts at certain angles
+---
+
+## ✅ RESOLVED: Pygame Isometric Projection Distortion
+
+**Status:** RESOLVED - Switched to Ursina 3D engine  
+**File:** `wizard_of_wor_iso_pygame.py` (archived)  
+**Original Severity:** Medium
 
 #### Problem Description
 
@@ -145,22 +154,131 @@ Generate tile/wall sprites at multiple rotation angles (0°, 90°, 180°, 270°)
 
 Consider using Pygame-ce's 3D capabilities or a lightweight 3D library with orthographic projection. This handles rotation correctly by design.
 
-#### Implementation Difficulty
+**UPDATE (2026-01-10): This issue was RESOLVED by switching to Ursina engine. See below.**
 
-| Option | Difficulty | Visual Quality | Performance |
-|--------|------------|----------------|-------------|
-| Option 1 (3D math) | Medium | Best | Good |
-| Option 2 (Pre-rendered) | Low | Limited angles | Best |
-| Option 3 (3D engine) | High | Best | Variable |
+---
 
-#### Testing Notes
+## ✅ RESOLVED: Isometric Projection Issue
 
-The distortion is most visible:
-- At 45° angles between cardinal directions
-- When walls are near the edge of the screen
-- During active rotation (motion makes it more obvious)
+**Resolution:** Replaced Pygame-based isometric rendering with Ursina 3D engine.
 
-At cardinal angles (0°, 90°, 180°, 270°), the projection looks acceptable.
+The new implementation uses:
+- **Orthographic camera** - True isometric projection without distortion
+- **Real 3D geometry** - Cubes for walls, proper depth handling
+- **Camera orbiting pivot** - Rotates around maze center at fixed tilt angle (35.264°)
+
+**Files:**
+- `wizard_of_wor_iso.py` - New Ursina-based version (now works correctly)
+- `wizard_of_wor_iso_pygame.py` - Old Pygame version (backup for reference)
+ - `assets/images/underwater_floor_tile.png` - Cropped floor texture
+ - `assets/images/underwater_wall_tile.png` - Cropped wall texture
+ - `assets/images/underwater_background.png` - Cropped scene background
+
+```python
+# Key camera implementation
+class IsometricCamera(Entity):
+    def update_camera_position(self):
+        camera.orthographic = True
+        # Position on sphere around pivot
+        rad = math.radians(self.angle)
+        tilt_rad = math.radians(35.264)  # True isometric angle
+        x = self.pivot.x + distance * math.sin(rad) * math.cos(tilt_rad)
+        y = self.pivot.y + distance * math.sin(tilt_rad)
+        z = self.pivot.z + distance * math.cos(rad) * math.cos(tilt_rad)
+        camera.position = Vec3(x, y, z)
+        camera.look_at(self.pivot)
+```
+
+---
+
+## ⚠️ OPEN PROBLEM: Ursina "plane" Model Not Rendering (Possible macOS Issue)
+
+**Status:** WORKAROUND FOUND  
+**File:** [wizard_of_wor_iso.py](wizard_of_wor_iso.py) - `MazeBuilder.build()` method  
+**Severity:** Low - Workaround exists  
+**Platform:** macOS (Apple Silicon / M-series) - may not affect other platforms
+
+### Problem Description
+
+When creating a floor using Ursina's built-in `"plane"` model, the entity does not render at all. The plane is invisible regardless of:
+- Color settings (tried `color.red`, `color.brown`, `color.rgb()`)
+- Position/scale adjustments
+- `unlit=True` or `False`
+- `double_sided=True`
+- Clip plane adjustments
+
+The `"plane"` model simply does not appear on screen.
+
+### Failed Attempts
+
+```python
+# DOES NOT WORK - plane is invisible
+floor = Entity(
+    model="plane",
+    scale=(50, 1, 40),
+    position=(10, -0.1, 7),
+    color=color.red,
+)
+```
+
+### Working Workaround
+
+Use `"quad"` model with `rotation_x=90` instead of `"plane"`:
+
+```python
+# WORKS - quad rotated to be horizontal
+floor = Entity(
+    model="quad",
+    scale=(50, 40),          # Note: 2D scale, not 3D
+    rotation_x=90,           # Rotate to horizontal
+    position=(10, -0.1, 7),
+    color=color.red,
+    unlit=True,
+    double_sided=True,
+)
+```
+
+### Root Cause Hypothesis
+
+This may be a macOS-specific rendering issue with Ursina/Panda3D:
+1. Possible backface culling issue specific to the "plane" model on macOS
+2. Could be related to Metal rendering backend on Apple Silicon
+3. The "plane" model might have incorrect normals or winding order on macOS
+
+### Investigation Needed
+
+- [ ] Test on Windows/Linux to confirm if macOS-specific
+- [ ] Check Ursina GitHub issues for similar reports
+- [ ] Test with different Panda3D rendering backends
+- [ ] Investigate if this affects other flat models
+
+---
+
+## ⚠️ OPEN PROBLEM: window.color Not Applied (White Background)
+
+**Status:** UNRESOLVED  
+**File:** [wizard_of_wor_iso.py](wizard_of_wor_iso.py) - main block  
+**Severity:** Low - Cosmetic issue
+
+### Problem Description
+
+Setting `window.color` in the main block does not change the background color:
+
+```python
+if __name__ == "__main__":
+    window.color = color.rgb(15, 35, 55)  # Deep ocean - NOT WORKING
+```
+
+The background remains white instead of the dark ocean blue. This may be related to:
+- Orthographic camera setup
+- Timing of when `window.color` is set vs when camera is configured
+- Possible macOS-specific issue
+
+### Workaround Options
+
+1. Create a large skybox/background Entity behind the scene
+2. Set `camera.clip_plane_far` to show a colored "void"
+3. Use a full-screen quad at far distance with desired color
 
 ---
 
@@ -294,8 +412,8 @@ NEON_GREEN = (0, 255, 100)     # Worluk, score
 
 ## Known Issues
 
-### Open Problem
-1. **🟡 Isometric projection distortion on rotation** - See OPEN PROBLEMS section above
+### Resolved
+1. **✅ Isometric projection distortion** - RESOLVED by switching to Ursina engine
 
 ### Minor
 2. Enemies can occasionally cluster near spawn points
@@ -312,10 +430,11 @@ NEON_GREEN = (0, 255, 100)     # Worluk, score
 - **Controls:** Arrow keys/WASD, Space to shoot
 
 ### Isometric 2.5D (`wizard_of_wor_iso.py`)
-- **Status:** Playable with minor visual issues
-- **Features:** Rotatable camera (mouse drag), zoom (scroll wheel), custom enemy sprites
+- **Status:** Complete - now using Ursina engine
+- **Engine:** Ursina with orthographic camera
+- **Features:** Rotatable camera (mouse drag), zoom (scroll wheel), proper 3D rendering
 - **Controls:** Arrow keys/WASD, Space to shoot, Mouse drag to rotate, Scroll to zoom, M to reset camera
-- **Known Bug:** Projection distortion at non-cardinal rotation angles (see OPEN PROBLEMS)
+- **Note:** Old Pygame version backed up as `wizard_of_wor_iso_pygame.py`
 
 ### 3D First-Person (`wizard_of_wor_3d.py`)
 - **Status:** Experimental
@@ -385,5 +504,5 @@ self.sounds['shoot'].play()
 
 ---
 
-*Last updated: 2026-01-09*
-*Session: Isometric 2.5D camera rotation - depth sorting fixed, projection distortion remains as open problem*
+*Last updated: 2026-01-10*
+*Session: Switched isometric version from Pygame to Ursina engine - projection distortion issue RESOLVED*
