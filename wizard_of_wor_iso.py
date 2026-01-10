@@ -14,35 +14,173 @@ Controls:
 """
 
 import math
+import os
 import random
+import traceback
 
 from ursina import *
+
+
+# =============================================================================
+# SOUND MANAGER
+# =============================================================================
+class SoundManager:
+    """Manages all game sounds - matching original Wizard of Wor."""
+
+    def __init__(self):
+        self.sound_paths = {}
+        self.music = None
+        self.music_volume = 0.25
+        self.sfx_volume = 0.5
+        self.current_loop = 1
+        self.beat_timer = 0
+        self.beat_interval = 0.5  # Seconds between beats
+        self.last_radar_time = 0
+        self.load_sounds()
+
+    def load_sounds(self):
+        """Load all sound effect paths."""
+        self.sound_paths = {
+            # Main game sounds
+            "player_fire": "assets/sounds/player-fire.wav",
+            "enemy_fire": "assets/sounds/enemy-fire.wav",
+            "enemy_dead": "assets/sounds/enemy-dead.wav",
+            "player_dead": "assets/sounds/player-dead.wav",
+            "worluk": "assets/sounds/worluk.wav",
+            "worluk_dead": "assets/sounds/worluk-dead.wav",
+            "worluk_escape": "assets/sounds/worluk-escape.wav",
+            "wizard_dead": "assets/sounds/wizard-dead.wav",
+            "wizard_escape": "assets/sounds/wizard-escape.wav",
+            "enemy_visible": "assets/sounds/enemy-visible.wav",
+            "player_enters": "assets/sounds/player-enters.wav",
+            "get_ready": "assets/sounds/getready.wav",
+            "game_over": "assets/sounds/gameover.wav",
+            "maze_exit": "assets/sounds/maze-exit.wav",
+            "double_score": "assets/sounds/doublescore.wav",
+            # Background loops (tempo increases with fewer enemies)
+            "loop01": "assets/sounds/loop01.wav",
+            "loop02": "assets/sounds/loop02.wav",
+            "loop03": "assets/sounds/loop03.wav",
+            "loop04": "assets/sounds/loop04.wav",
+            "loop05": "assets/sounds/loop05.wav",
+            # Old/classic sounds (fallbacks)
+            "radar_blip": "assets/sounds/old/radar_blip.wav",
+            "walking_beat": "assets/sounds/old/walking_beat.wav",
+            "walking_beat_fast": "assets/sounds/old/walking_beat_fast.wav",
+            "laugh": "assets/sounds/old/laugh.wav",
+            "voice_wizard": "assets/sounds/old/voice_wizard.wav",
+            "voice_welcome": "assets/sounds/old/voice_welcome.wav",
+            "voice_prepare": "assets/sounds/old/voice_prepare.wav",
+            "voice_game_over": "assets/sounds/old/voice_game_over.wav",
+            "wizard_teleport": "assets/sounds/old/wizard_teleport.wav",
+        }
+
+        # Verify files exist
+        for name, path in self.sound_paths.items():
+            if not os.path.exists(path):
+                print(f"Warning: Sound file not found: {path}")
+
+    def play(self, name, volume=None):
+        """Play a sound effect (creates new Audio instance each time)."""
+        if name in self.sound_paths and os.path.exists(self.sound_paths[name]):
+            try:
+                vol = volume if volume is not None else self.sfx_volume
+                Audio(self.sound_paths[name], volume=vol, autoplay=True)
+            except Exception as e:
+                print(f"Warning: Could not play sound {name}: {e}")
+
+    def play_music(self, name, volume=None):
+        """Play background music (loops)."""
+        if self.music:
+            self.music.stop()
+            self.music = None
+
+        if name in self.sound_paths and os.path.exists(self.sound_paths[name]):
+            try:
+                vol = volume if volume is not None else self.music_volume
+                self.music = Audio(
+                    self.sound_paths[name], volume=vol, loop=True, autoplay=True
+                )
+            except Exception as e:
+                print(f"Warning: Could not play music {name}: {e}")
+
+    def stop_music(self):
+        """Stop background music."""
+        if self.music:
+            self.music.stop()
+            self.music = None
+
+    def update_music_tempo(self, enemy_count, max_enemies=6):
+        """Change background loop based on remaining enemies (like original WoW)."""
+        # Original Wizard of Wor speeds up music as enemies decrease
+        if enemy_count <= 0:
+            return
+
+        # Calculate which loop to play (1-5, higher = faster tempo)
+        if enemy_count >= max_enemies:
+            new_loop = 1
+        elif enemy_count >= max_enemies * 0.7:
+            new_loop = 2
+        elif enemy_count >= max_enemies * 0.5:
+            new_loop = 3
+        elif enemy_count >= max_enemies * 0.3:
+            new_loop = 4
+        else:
+            new_loop = 5
+
+        if new_loop != self.current_loop:
+            self.current_loop = new_loop
+            self.play_music(f"loop0{new_loop}", self.music_volume)
+
+    def play_radar_blip(self, distance, current_time):
+        """Play radar blip based on enemy distance (like original WoW radar)."""
+        # Only blip if enough time has passed (avoid spam)
+        if current_time - self.last_radar_time < 0.3:
+            return
+
+        # Closer enemies = louder blip
+        if distance < 3:
+            self.play("radar_blip", 0.4)
+            self.last_radar_time = current_time
+        elif distance < 5:
+            self.play("radar_blip", 0.25)
+            self.last_radar_time = current_time
+        elif distance < 8:
+            self.play("radar_blip", 0.1)
+            self.last_radar_time = current_time
+
+
+# Global sound manager instance (created after app init)
+sound_manager = None
 
 # =============================================================================
 # MAZE LAYOUT
 # =============================================================================
-MAZE = [
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1],
-    [0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0],  # Tunnel row
-    [1, 0, 1, 1, 0, 1, 0, 1, 1, 1, 1, 1, 1, 1, 0, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1, 0, 1, 0, 1, 1, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 0, 1, 1, 0, 1, 1, 1, 0, 0, 1, 0, 0, 1, 1, 1, 0, 1, 1, 0, 1],
-    [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1],
-    [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+MAZE_LAYOUT = [
+    "#####################",
+    "#.#####..###..#####.#",
+    "#..##.#.......#.##..#",
+    "#.....#.##.##.#.....#",
+    "#...#...........#...#",
+    "#...#..#######..#...#",
+    "#...####.....####...#",
+    ".......#.....#.......",
+    "#......#.....#......#",
+    "#..#.....#.#.....#..#",
+    "#..#.##..#.#..##.#..#",
+    "#..###.........###..#",
+    "#...................#",
+    "#...................#",
+    "#####################",
 ]
+MAZE = [[1 if cell == "#" else 0 for cell in row] for row in MAZE_LAYOUT]
 
 MAZE_WIDTH = len(MAZE[0])
 MAZE_HEIGHT = len(MAZE)
 TILE_SIZE = 1.0  # Size of each tile in 3D units
 WALL_HEIGHT = 0.8
+WALL_THICKNESS = 1.2  # Visual wall thickness to tighten corridors
+WALL_TOP_SCALE = TILE_SIZE * WALL_THICKNESS * 1.02
 
 # Colors (underwater theme - matching reference art)
 NEON_BLUE = color.rgb(0, 150, 255)
@@ -64,19 +202,21 @@ SEAWEED_GREEN = color.rgb(30, 120, 60)
 DEEP_WATER = color.rgb(10, 30, 60)
 SAND_COLOR = color.rgb(60, 80, 70)
 
-# Texture assets (cropped from assets/images/underwater_maze_assets.png)
-FLOOR_TEXTURE = "assets/images/underwater_floor_tile.png"
-WALL_TEXTURE = "assets/images/underwater_wall_tile.png"
-BACKGROUND_TEXTURE = "assets/images/underwater_background.png"
-
+# Texture assets directory
 ASSET_DIR = "assets/images/underwater_assets"
-WALL_TOP_TEXTURES = {
+FLOOR_TEXTURE_PATH = f"{ASSET_DIR}/floor_tile.png"
+WALL_TEXTURE_PATH = f"{ASSET_DIR}/wall_tile_base.png"
+BACKGROUND_TEXTURE_PATH = f"{ASSET_DIR}/background.png"
+SEA_CREATURE_DIR = "assets/images/sea_creatures"
+PLAYER_TEXTURE_PATH = "assets/images/shapshique.png"
+
+WALL_TOP_TEXTURE_PATHS = {
     "plus": f"{ASSET_DIR}/wall_plus.png",
     "t": f"{ASSET_DIR}/wall_t.png",
     "corner": f"{ASSET_DIR}/wall_corner.png",
     "straight": f"{ASSET_DIR}/wall_straight.png",
 }
-DECOR_TEXTURES = {
+DECOR_TEXTURE_PATHS = {
     "coral_pink_orange": f"{ASSET_DIR}/coral_pink_orange.png",
     "seaweed_starfish": f"{ASSET_DIR}/seaweed_starfish.png",
     "anemone_yellow_coral": f"{ASSET_DIR}/anemone_yellow_coral.png",
@@ -88,17 +228,70 @@ DECOR_TEXTURES = {
     "bubble_large": f"{ASSET_DIR}/bubble_large.png",
     "bubble_small": f"{ASSET_DIR}/bubble_small.png",
 }
+SMALL_FISH_TEXTURE_PATHS = [
+    f"{SEA_CREATURE_DIR}/small_fish_1.png",
+    f"{SEA_CREATURE_DIR}/small_fish_2.png",
+    f"{SEA_CREATURE_DIR}/small_fish_3.png",
+    f"{SEA_CREATURE_DIR}/small_fish_4.png",
+    f"{SEA_CREATURE_DIR}/small_fish_5.png",
+    f"{SEA_CREATURE_DIR}/small_fish_6.png",
+]
 
 # =============================================================================
 # GAME APPLICATION
 # =============================================================================
 app = Ursina(
-    title="Wizard of Wor - Isometric 2.5D",
+    title="Shapshique of Wor - Isometric 2.5D",
     borderless=False,
     fullscreen=False,
-    development_mode=False,
+    development_mode=True,
     vsync=True,
+    use_ingame_console=True,
 )
+
+
+def load_art_texture(path, clamp=True):
+    texture = load_texture(path)
+    if texture:
+        texture.filtering = None
+        texture.wrap_mode = "clamp" if clamp else "repeat"
+    return texture
+
+
+TEXTURES = {
+    "floor": load_art_texture(FLOOR_TEXTURE_PATH, clamp=False),
+    "wall": load_art_texture(WALL_TEXTURE_PATH, clamp=True),
+    "background": load_art_texture(BACKGROUND_TEXTURE_PATH, clamp=True),
+}
+for key, path in WALL_TOP_TEXTURE_PATHS.items():
+    TEXTURES[f"wall_{key}"] = load_art_texture(path, clamp=True)
+for key, path in DECOR_TEXTURE_PATHS.items():
+    TEXTURES[key] = load_art_texture(path, clamp=True)
+for idx, path in enumerate(SMALL_FISH_TEXTURE_PATHS, start=1):
+    TEXTURES[f"small_fish_{idx}"] = load_art_texture(path, clamp=True)
+TEXTURES["player"] = load_art_texture(PLAYER_TEXTURE_PATH, clamp=True)
+
+WALL_TOP_TEXTURES = {
+    "plus": TEXTURES["wall_plus"],
+    "t": TEXTURES["wall_t"],
+    "corner": TEXTURES["wall_corner"],
+    "straight": TEXTURES["wall_straight"],
+}
+DECOR_TEXTURES = {
+    "coral_pink_orange": TEXTURES["coral_pink_orange"],
+    "seaweed_starfish": TEXTURES["seaweed_starfish"],
+    "anemone_yellow_coral": TEXTURES["anemone_yellow_coral"],
+    "coral_blue": TEXTURES["coral_blue"],
+    "shell": TEXTURES["shell"],
+    "rock": TEXTURES["rock"],
+    "sparkle": TEXTURES["sparkle"],
+    "submarine": TEXTURES["submarine"],
+    "bubble_large": TEXTURES["bubble_large"],
+    "bubble_small": TEXTURES["bubble_small"],
+}
+SMALL_FISH_TEXTURES = [
+    TEXTURES[f"small_fish_{idx}"] for idx in range(1, len(SMALL_FISH_TEXTURE_PATHS) + 1)
+]
 
 
 # =============================================================================
@@ -119,8 +312,8 @@ class IsometricCamera(Entity):
         # Camera settings
         self.rotation_sensitivity = 80  # Degrees per screen-width of drag
         self.pan_sensitivity = 30  # Pan speed for trackpad
-        self.min_zoom = 15  # Don't allow zooming in too much (causes clipping)
-        self.max_zoom = 40
+        self.min_zoom = 8  # Allow closer zoom for detail view
+        self.max_zoom = 45
         self.target_zoom = 24  # Default zoom to fit maze nicely
 
         # The pivot sits at maze center - camera orbits around this
@@ -165,7 +358,7 @@ class IsometricCamera(Entity):
         self.background = Entity(
             parent=camera,
             model="quad",
-            texture=BACKGROUND_TEXTURE,
+            texture=TEXTURES["background"],
             color=color.white,
             unlit=True,
             double_sided=True,
@@ -174,50 +367,93 @@ class IsometricCamera(Entity):
         self._update_background_scale()
 
     def update(self):
-        # Smooth yaw interpolation
-        self.yaw += (self.target_yaw - self.yaw) * 0.15
-        self.pivot.rotation_y = -self.yaw
+        try:
+            # Smooth yaw interpolation
+            self.yaw += (self.target_yaw - self.yaw) * 0.15
+            self.pivot.rotation_y = -self.yaw
 
-        # Smooth pan interpolation
-        self.pivot.position += (self.target_pivot_pos - self.pivot.position) * 0.1
+            # Smooth pan interpolation
+            self.pivot.position += (self.target_pivot_pos - self.pivot.position) * 0.1
 
-        # Smooth zoom
-        camera.fov += (self.target_zoom - camera.fov) * 0.1
-        self._update_background_scale()
+            # Smooth zoom
+            camera.fov += (self.target_zoom - camera.fov) * 0.1
+            if not math.isfinite(camera.fov):
+                camera.fov = self.target_zoom
+            camera.fov = clamp(camera.fov, self.min_zoom, self.max_zoom)
+            self._update_background_scale()
 
-        # Left-click drag rotation
-        if mouse.left:
-            # Use mouse velocity for smooth rotation
-            self.target_yaw += mouse.velocity[0] * self.rotation_sensitivity
+            # Left-click drag rotation
+            if mouse.left and not held_keys["shift"]:
+                # Use mouse velocity for smooth rotation
+                self.target_yaw += mouse.velocity[0] * self.rotation_sensitivity
 
-        # Shift + mouse drag for panning
-        # Simple screen-space panning: directly move the view along camera axes
-        if held_keys["shift"]:
-            if mouse.velocity[0] != 0 or mouse.velocity[1] != 0:
-                # Scale by orthographic zoom level for consistent pan speed
-                scale = camera.fov / 50
-                self.target_pivot_pos += camera.right * mouse.velocity[0] * scale
-                self.target_pivot_pos -= camera.up * mouse.velocity[1] * scale
+            # Shift + mouse move for panning (pure 2D screen-space like dragging paper)
+            if held_keys["shift"]:
+                if mouse.velocity[0] != 0 or mouse.velocity[1] != 0:
+                    if not (
+                        math.isfinite(mouse.velocity[0])
+                        and math.isfinite(mouse.velocity[1])
+                    ):
+                        return
+                    # Scale by orthographic zoom level for consistent pan speed
+                    pan_scale = camera.fov * 0.8
 
-    def input(self, key):
-        if key == "middle mouse down" or key == "m":
+                    # Use camera's world-space right and up vectors for true screen-space pan
+                    # This moves the pivot opposite to mouse direction (drag-to-pan feel)
+                    cam_right = camera.right
+                    cam_up = camera.up
+
+                    # Mouse X -> pan horizontally on screen
+                    # Mouse Y -> pan vertically on screen
+                    self.target_pivot_pos -= cam_right * mouse.velocity[0] * pan_scale
+                    self.target_pivot_pos -= cam_up * mouse.velocity[1] * pan_scale
+
+                    # Keep pivot Y at ground level (don't let it go underground or too high)
+                    self.target_pivot_pos.y = 0
+
+                    # Clamp pan to reasonable bounds around the maze
+                    maze_center_x = MAZE_WIDTH * TILE_SIZE / 2
+                    maze_center_z = MAZE_HEIGHT * TILE_SIZE / 2
+                    max_pan = 20  # Max distance from maze center
+                    self.target_pivot_pos.x = clamp(
+                        self.target_pivot_pos.x,
+                        maze_center_x - max_pan,
+                        maze_center_x + max_pan,
+                    )
+                    self.target_pivot_pos.z = clamp(
+                        self.target_pivot_pos.z,
+                        maze_center_z - max_pan,
+                        maze_center_z + max_pan,
+                    )
+        except Exception:
+            print("IsometricCamera.update error; resetting camera.")
+            traceback.print_exc()
             self.reset()
 
-        elif key == "scroll up":
-            if held_keys["shift"]:
-                # Shift+scroll = pan forward/back
-                forward = self.get_camera_forward()
-                self.target_pivot_pos += forward * 2
-            else:
-                self.target_zoom = max(self.min_zoom, self.target_zoom - 1)
+    def input(self, key):
+        try:
+            if key == "middle mouse down" or key == "m":
+                self.reset()
 
-        elif key == "scroll down":
-            if held_keys["shift"]:
-                # Shift+scroll = pan forward/back
-                forward = self.get_camera_forward()
-                self.target_pivot_pos -= forward * 2
-            else:
-                self.target_zoom = min(self.max_zoom, self.target_zoom + 1)
+            elif key == "scroll up":
+                if held_keys["shift"]:
+                    # Shift+scroll = pan forward/back
+                    forward = self.get_camera_forward()
+                    self.target_pivot_pos += forward * 2
+                else:
+                    self.target_zoom = max(self.min_zoom, self.target_zoom - 1)
+
+            elif key == "scroll down":
+                if held_keys["shift"]:
+                    # Shift+scroll = pan forward/back
+                    forward = self.get_camera_forward()
+                    self.target_pivot_pos -= forward * 2
+                else:
+                    self.target_zoom = min(self.max_zoom, self.target_zoom + 1)
+        except Exception:
+            print(f"IsometricCamera.input error ({key}); resetting camera.")
+            traceback.print_exc()
+            self.reset()
 
     def reset(self):
         """Reset camera to default isometric position."""
@@ -233,7 +469,11 @@ class IsometricCamera(Entity):
             if hasattr(window, "aspect_ratio")
             else window.size[0] / window.size[1]
         )
+        if not math.isfinite(aspect) or aspect <= 0:
+            return
         size = camera.fov
+        if not math.isfinite(size) or size <= 0:
+            return
         self.background.scale = (size * aspect, size)
 
     def get_camera_forward(self):
@@ -257,6 +497,177 @@ class IsometricCamera(Entity):
 # =============================================================================
 # MAZE BUILDER
 # =============================================================================
+class Bubble(Entity):
+    """Smoothly drifting bubble sprite with wraparound."""
+
+    def __init__(self, texture, bounds, y_bounds):
+        super().__init__(
+            model="quad",
+            texture=texture,
+            color=color.white,  # Use white to preserve PNG alpha/gradient
+            unlit=True,
+            double_sided=True,
+            billboard=True,
+        )
+        self.x_min, self.x_max, self.z_min, self.z_max = bounds
+        self.y_min, self.y_max = y_bounds
+        self._reset(random_y=True)
+
+    def _reset(self, random_y=False):
+        self.base_x = random.uniform(self.x_min, self.x_max)
+        self.base_z = random.uniform(self.z_min, self.z_max)
+        self.drift_phase = random.uniform(0, math.tau)
+        self.drift_speed = random.uniform(0.4, 0.9)
+        self.drift_radius = random.uniform(0.05, 0.18)
+        self.speed = random.uniform(0.18, 0.35)
+        scale = random.uniform(0.25, 0.45)
+        self.scale = (scale, scale)
+        self.y = random.uniform(self.y_min, self.y_max) if random_y else self.y_min
+
+    def update(self):
+        self.y += self.speed * time.dt
+        if self.y > self.y_max:
+            self._reset()
+
+        t = (self.y - self.y_min) / (self.y_max - self.y_min)
+        fade = min(t / 0.15, (1 - t) / 0.15, 1.0)
+        self.alpha = 0.15 + 0.85 * fade
+
+        angle = time.time() * self.drift_speed + self.drift_phase
+        self.x = self.base_x + math.sin(angle) * self.drift_radius
+        self.z = self.base_z + math.cos(angle) * self.drift_radius
+
+
+class TrailBubble(Entity):
+    """Small bubble particle for creature trails - floats up and fades away."""
+
+    def __init__(self, position):
+        super().__init__(
+            model="sphere",
+            color=color.rgba(180, 230, 255, 180),
+            scale=random.uniform(0.04, 0.12),
+            position=position,
+            unlit=True,
+        )
+        # Add random offset so they don't spawn in a perfect line
+        self.x += random.uniform(-0.08, 0.08)
+        self.z += random.uniform(-0.08, 0.08)
+
+        self.drift_speed = random.uniform(-0.15, 0.15)  # Drifting left/right
+        self.rise_speed = random.uniform(0.4, 0.8)  # Floating up
+        self.fade_speed = random.uniform(0.4, 0.7)
+
+    def update(self):
+        # Float upward
+        self.y += self.rise_speed * time.dt
+
+        # Drift sideways (simulates water current)
+        self.x += self.drift_speed * time.dt
+
+        # Slowly fade away
+        self.alpha -= time.dt * self.fade_speed
+
+        # Destroy when invisible (cleanup memory!)
+        if self.alpha <= 0:
+            destroy(self)
+
+
+class AmbientFish(Entity):
+    """Ambient fish that swims smoothly outside the maze boundaries."""
+
+    def __init__(self, x, z, texture, swim_direction=1):
+        super().__init__(
+            model="quad",
+            texture=texture,
+            color=color.white,
+            unlit=True,
+            double_sided=True,
+            billboard=True,
+        )
+        # World position (not grid)
+        self.world_x = x
+        self.world_z = z
+        self.base_y = random.uniform(0.3, 1.5)  # Height variation
+
+        # Swimming parameters - slow and smooth
+        self.speed = random.uniform(0.3, 0.8)  # Slow swimming speed
+        self.swim_direction = swim_direction  # 1 = right, -1 = left
+        self.vertical_drift = random.uniform(-0.1, 0.1)  # Slight vertical movement
+
+        # Smooth bobbing animation
+        self.bob_phase = random.uniform(0, math.tau)
+        self.bob_speed = random.uniform(0.5, 1.0)  # Slower bobbing
+        self.bob_amp = random.uniform(0.05, 0.15)
+
+        # Gentle wave motion
+        self.wave_phase = random.uniform(0, math.tau)
+        self.wave_speed = random.uniform(0.3, 0.6)
+        self.wave_amp = random.uniform(0.1, 0.25)
+
+        # Scale
+        self.base_scale = random.uniform(0.4, 0.8)
+        self.facing = swim_direction
+        self.bubble_cooldown = random.uniform(0, 2)
+
+        # Shadow (optional - may not be visible outside maze)
+        self.shadow = None
+        self._update_scale()
+        self._sync_position()
+
+    def _update_scale(self):
+        texture = self.texture
+        aspect = 1.4
+        if texture and hasattr(texture, "size") and texture.size[1] != 0:
+            aspect = texture.size[0] / texture.size[1]
+        self.scale = (self.base_scale * aspect * self.facing, self.base_scale)
+
+    def _sync_position(self):
+        t = time.time()
+
+        # Smooth horizontal movement
+        self.world_x += self.swim_direction * self.speed * time.dt
+
+        # Gentle wave motion perpendicular to swim direction
+        wave_offset = math.sin(t * self.wave_speed + self.wave_phase) * self.wave_amp
+
+        # Smooth vertical bobbing
+        bob = math.sin(t * self.bob_speed + self.bob_phase) * self.bob_amp
+
+        # Apply position
+        self.x = self.world_x
+        self.z = self.world_z + wave_offset + self.vertical_drift * math.sin(t * 0.2)
+        self.y = self.base_y + bob
+
+        # Update shadow if exists
+        if self.shadow:
+            self.shadow.x = self.x
+            self.shadow.z = self.z
+            self.shadow.y = 0.02
+
+    def update(self):
+        self._sync_position()
+
+        # Wrap around when fish swims too far
+        maze_width_world = MAZE_WIDTH * TILE_SIZE
+        margin = 8  # Distance outside maze to swim
+
+        if self.swim_direction > 0 and self.world_x > maze_width_world + margin:
+            self.world_x = -margin
+        elif self.swim_direction < 0 and self.world_x < -margin:
+            self.world_x = maze_width_world + margin
+
+        # Spawn bubble trail behind the fish (less frequently for ambient)
+        self.bubble_cooldown -= time.dt
+        if self.bubble_cooldown <= 0:
+            spawn_pos = Vec3(
+                self.x - self.swim_direction * 0.3,
+                self.y,
+                self.z,
+            )
+            TrailBubble(position=spawn_pos)
+            self.bubble_cooldown = random.uniform(0.4, 1.0)  # Less frequent bubbles
+
+
 class MazeBuilder:
     """Builds the 3D underwater maze from the 2D layout."""
 
@@ -271,6 +682,7 @@ class MazeBuilder:
         self.edge_positions = []
         self.interior_positions = []
         self.sparkles = []
+        self.ambient_fish = []
 
     def _is_wall(self, col, row):
         return 0 <= row < MAZE_HEIGHT and 0 <= col < MAZE_WIDTH and MAZE[row][col] == 1
@@ -284,6 +696,27 @@ class MazeBuilder:
             or self._is_wall(col, row - 1)
             or self._is_wall(col, row + 1)
         )
+
+    def _is_safe_fish_tile(self, col, row):
+        if self._is_wall(col, row):
+            return False
+        for dx, dy in [
+            (1, 0),
+            (-1, 0),
+            (0, 1),
+            (0, -1),
+            (1, 1),
+            (1, -1),
+            (-1, 1),
+            (-1, -1),
+        ]:
+            nx = col + dx
+            ny = row + dy
+            if not (0 <= nx < MAZE_WIDTH and 0 <= ny < MAZE_HEIGHT):
+                return False
+            if self._is_wall(nx, ny):
+                return False
+        return True
 
     def _tile_center(self, col, row):
         return (col + 0.5) * TILE_SIZE, (row + 0.5) * TILE_SIZE
@@ -333,7 +766,7 @@ class MazeBuilder:
             rotation_x=90,
             rotation_y=rotation,
             position=(x, WALL_HEIGHT + 0.07, z),
-            scale=(TILE_SIZE * 1.05, TILE_SIZE * 1.05),
+            scale=(WALL_TOP_SCALE, WALL_TOP_SCALE),
             color=color.white,
             unlit=True,
             double_sided=True,
@@ -391,9 +824,9 @@ class MazeBuilder:
 
     def build(self):
         """Create the 3D underwater maze matching reference art style."""
-        # Create sandy ocean floor
-        floor_scale_x = MAZE_WIDTH + 4
-        floor_scale_z = MAZE_HEIGHT + 4
+        # Create sandy ocean floor (sized to maze bounds, no extra border)
+        floor_scale_x = MAZE_WIDTH
+        floor_scale_z = MAZE_HEIGHT
         floor = Entity(
             model="quad",
             scale=(floor_scale_x, floor_scale_z),
@@ -403,9 +836,9 @@ class MazeBuilder:
                 -0.1,
                 MAZE_HEIGHT * TILE_SIZE / 2 - TILE_SIZE / 2,
             ),
-            texture=FLOOR_TEXTURE,
-            texture_scale=(floor_scale_x, floor_scale_z),
-            color=color.white,
+            texture=TEXTURES["floor"],
+            texture_scale=(floor_scale_x / 2, floor_scale_z / 2),
+            color=color.rgb(220, 200, 160),  # Warm sandy tint
             unlit=True,
             double_sided=True,
         )
@@ -422,8 +855,12 @@ class MazeBuilder:
                     wall = Entity(
                         model="cube",
                         position=(x, WALL_HEIGHT / 2, z),
-                        scale=(TILE_SIZE * 0.95, WALL_HEIGHT, TILE_SIZE * 0.95),
-                        texture=WALL_TEXTURE,
+                        scale=(
+                            TILE_SIZE * WALL_THICKNESS,
+                            WALL_HEIGHT,
+                            TILE_SIZE * WALL_THICKNESS,
+                        ),
+                        texture=TEXTURES["wall"],
                         texture_scale=(1, 1),
                         color=color.white,
                     )
@@ -433,7 +870,11 @@ class MazeBuilder:
                     edge = Entity(
                         model="cube",
                         position=(x, WALL_HEIGHT + 0.03, z),
-                        scale=(TILE_SIZE * 0.98, 0.06, TILE_SIZE * 0.98),
+                        scale=(
+                            TILE_SIZE * WALL_THICKNESS,
+                            0.06,
+                            TILE_SIZE * WALL_THICKNESS,
+                        ),
                         color=color.rgb(0, 220, 230),
                         unlit=True,
                     )
@@ -457,6 +898,9 @@ class MazeBuilder:
 
         # Add floating bubbles
         self._create_bubble_particles()
+
+        # Add ambient fish (disabled for now)
+        # self._add_ambient_fish()
 
         # Add water sparkles
         self._add_sparkles()
@@ -520,30 +964,20 @@ class MazeBuilder:
 
     def _create_bubble_particles(self):
         """Create floating bubble particles for atmosphere."""
+        bounds = (
+            -2 * TILE_SIZE,
+            (MAZE_WIDTH + 2) * TILE_SIZE,
+            -2 * TILE_SIZE,
+            (MAZE_HEIGHT + 2) * TILE_SIZE,
+        )
+        y_bounds = (0.4, 3.0)
         for _ in range(28):
-            x = random.uniform(-2, MAZE_WIDTH + 2) * TILE_SIZE
-            z = random.uniform(-2, MAZE_HEIGHT + 2) * TILE_SIZE
-            texture = random.choice(
-                [DECOR_TEXTURES["bubble_large"], DECOR_TEXTURES["bubble_small"]]
-            )
-            scale = random.uniform(0.25, 0.45)
-
-            bubble = Entity(
-                model="quad",
-                texture=texture,
-                position=(x, random.uniform(0.5, 2.5), z),
-                scale=(scale, scale),
-                color=color.rgba(200, 255, 255, 160),
-                unlit=True,
-                double_sided=True,
-                billboard=True,
-            )
-            bubble.animate_y(
-                bubble.y + random.uniform(2.5, 4.5),
-                duration=random.uniform(5, 9),
-                loop=True,
-                curve=curve.linear,
-            )
+            # Use small bubble most of the time, large bubble occasionally
+            if random.random() < 0.8:
+                texture = DECOR_TEXTURES["bubble_small"]
+            else:
+                texture = DECOR_TEXTURES["bubble_large"]
+            bubble = Bubble(texture, bounds, y_bounds)
             self.bubbles.append(bubble)
 
     def _add_sparkles(self):
@@ -558,19 +992,60 @@ class MazeBuilder:
             z += random.uniform(-0.2, 0.2)
             self._spawn_sparkle(x, z, random.uniform(0.6, 1.6))
 
+    def _add_ambient_fish(self):
+        """Spawn ambient fish swimming outside the maze boundaries."""
+        maze_width = MAZE_WIDTH * TILE_SIZE
+        maze_height = MAZE_HEIGHT * TILE_SIZE
+
+        # Spawn fish on different "lanes" outside the maze
+        fish_count = 12  # Number of ambient fish
+
+        for i in range(fish_count):
+            texture = random.choice(SMALL_FISH_TEXTURES)
+
+            # Randomly choose which side of the maze (top, bottom, left, right)
+            side = random.choice(["top", "bottom", "left", "right"])
+
+            if side == "top":
+                # Fish swimming above the maze (negative Z)
+                x = random.uniform(-3, maze_width + 3)
+                z = random.uniform(-4, -1.5)
+                direction = random.choice([1, -1])
+            elif side == "bottom":
+                # Fish swimming below the maze (positive Z)
+                x = random.uniform(-3, maze_width + 3)
+                z = random.uniform(maze_height + 1.5, maze_height + 4)
+                direction = random.choice([1, -1])
+            elif side == "left":
+                # Fish swimming to the left of maze
+                x = random.uniform(-5, -2)
+                z = random.uniform(-2, maze_height + 2)
+                direction = 1  # Swim right
+            else:  # right
+                # Fish swimming to the right of maze
+                x = random.uniform(maze_width + 2, maze_width + 5)
+                z = random.uniform(-2, maze_height + 2)
+                direction = -1  # Swim left
+
+            fish = AmbientFish(x, z, texture, swim_direction=direction)
+            self.ambient_fish.append(fish)
+
 
 # =============================================================================
 # PLAYER
 # =============================================================================
 class Player(Entity):
-    """Player entity - Cute Submarine."""
+    """Player entity - Shapshique sprite."""
 
     def __init__(self, grid_x, grid_y, **kwargs):
         super().__init__(
-            model="cube",
-            scale=(0.7, 0.5, 0.5),
-            position=(grid_x * TILE_SIZE, 0.3, grid_y * TILE_SIZE),
-            color=NEON_YELLOW,  # Yellow submarine!
+            model="quad",
+            texture=TEXTURES["player"],
+            position=(grid_x * TILE_SIZE, 0.45, grid_y * TILE_SIZE),
+            color=color.white,
+            unlit=True,
+            double_sided=True,
+            billboard=True,
             **kwargs,
         )
 
@@ -579,35 +1054,32 @@ class Player(Entity):
         self.speed = 0.08
         self.direction = (1, 0)  # Facing right
         self.shoot_cooldown = 0
+        self.base_scale = 0.75
+        self.facing = 1
+        self.shadow = None
 
         self.score = 0
         self.lives = 3
 
-        # Submarine cabin/window
-        self.visor = Entity(
-            parent=self,
-            model="sphere",
-            scale=(0.5, 0.6, 0.4),
-            position=(0, 0.1, 0.2),
-            color=color.rgb(150, 220, 255),  # Light blue window
-        )
+        self._update_scale()
+        self._spawn_shadow()
 
-        # Periscope
-        self.periscope = Entity(
-            parent=self,
-            model="cube",
-            scale=(0.1, 0.3, 0.1),
-            position=(0, 0.4, 0),
-            color=color.rgb(200, 180, 80),
-        )
+    def _update_scale(self):
+        texture = self.texture
+        aspect = 1.0
+        if texture and hasattr(texture, "size") and texture.size[1] != 0:
+            aspect = texture.size[0] / texture.size[1]
+        self.scale = (self.base_scale * aspect * self.facing, self.base_scale)
 
-        # Propeller area
-        self.propeller = Entity(
-            parent=self,
-            model="cube",
-            scale=(0.2, 0.3, 0.15),
-            position=(0, 0, -0.35),
-            color=color.rgb(200, 180, 80),
+    def _spawn_shadow(self):
+        self.shadow = Entity(
+            model="quad",
+            texture="circle",
+            color=color.black66,
+            rotation_x=90,
+            scale=(0.55, 0.25),
+            unlit=True,
+            double_sided=True,
         )
 
     def move(self, dx, dy):
@@ -615,15 +1087,14 @@ class Player(Entity):
         if dx != 0 or dy != 0:
             self.direction = (dx, dy)
 
-            # Face movement direction
-            if dx > 0:
-                self.rotation_y = -90
-            elif dx < 0:
-                self.rotation_y = 90
-            elif dy > 0:
-                self.rotation_y = 180
-            elif dy < 0:
-                self.rotation_y = 0
+            if dx > 0 and self.facing != 1:
+                self.facing = 1
+                self.texture_scale = Vec2(1, 1)
+                self._update_scale()
+            elif dx < 0 and self.facing != -1:
+                self.facing = -1
+                self.texture_scale = Vec2(-1, 1)
+                self._update_scale()
 
         new_x = self.grid_x + dx * self.speed
         new_y = self.grid_y + dy * self.speed
@@ -649,6 +1120,10 @@ class Player(Entity):
         # Update 3D position
         self.x = self.grid_x * TILE_SIZE
         self.z = self.grid_y * TILE_SIZE
+        if self.shadow:
+            self.shadow.x = self.x
+            self.shadow.z = self.z
+            self.shadow.y = 0.02
 
     def update(self):
         if self.shoot_cooldown > 0:
@@ -662,7 +1137,7 @@ class Bullet(Entity):
     """Plasma bullet projectile."""
 
     def __init__(self, grid_x, grid_y, direction, is_player=True, **kwargs):
-        bullet_color = NEON_YELLOW if is_player else NEON_RED
+        bullet_color = color.rgba(120, 220, 255, 200) if is_player else NEON_RED
 
         super().__init__(
             model="sphere",
@@ -679,6 +1154,7 @@ class Bullet(Entity):
         self.speed = 0.25
         self.is_player = is_player
         self.lifetime = 3
+        self.trail_cooldown = 0
 
         # Glow effect
         self.glow = Entity(
@@ -710,6 +1186,13 @@ class Bullet(Entity):
         self.x = self.grid_x * TILE_SIZE
         self.z = self.grid_y * TILE_SIZE
 
+        # Water trail for player shots
+        if self.is_player:
+            self.trail_cooldown -= time.dt
+            if self.trail_cooldown <= 0:
+                TrailBubble(position=self.position + Vec3(0, -0.05, 0))
+                self.trail_cooldown = random.uniform(0.03, 0.08)
+
         # Check wall collision
         test_x = int(self.grid_x + 0.5)
         test_y = int(self.grid_y + 0.5)
@@ -726,23 +1209,26 @@ class Bullet(Entity):
 
     def _spawn_impact(self):
         """Create impact particles."""
-        for _ in range(5):
+        particle_count = 10 if self.is_player else 5
+        for _ in range(particle_count):
             particle = Entity(
                 model="sphere",
-                scale=0.1,
+                scale=random.uniform(0.05, 0.12),
                 position=self.position,
-                color=self.color,
+                color=(
+                    self.color if not self.is_player else color.rgba(140, 230, 255, 180)
+                ),
                 unlit=True,
             )
-            particle.animate_scale(0, duration=0.3)
+            particle.animate_scale(0, duration=0.25)
             particle.animate_position(
                 self.position
                 + Vec3(
-                    random.uniform(-0.5, 0.5),
-                    random.uniform(0, 0.5),
-                    random.uniform(-0.5, 0.5),
+                    random.uniform(-0.4, 0.4),
+                    random.uniform(0, 0.6),
+                    random.uniform(-0.4, 0.4),
                 ),
-                duration=0.3,
+                duration=0.25,
             )
             destroy(particle, delay=0.3)
 
@@ -751,7 +1237,16 @@ class Bullet(Entity):
 # ENEMY
 # =============================================================================
 class Enemy(Entity):
-    """Enemy entity with type-specific behavior."""
+    """Enemy entity with type-specific behavior - using fish sprites."""
+
+    # Fish texture mappings for each enemy type
+    ENEMY_TEXTURES = {
+        "burwor": "assets/images/sea_creatures/glow_fish.png",
+        "garwor": "assets/images/sea_creatures/jellyfish.png",
+        "thorwor": "assets/images/sea_creatures/barracuda.png",
+        "worluk": "assets/images/sea_creatures/eel.png",
+        "wizard": "assets/images/sea_creatures/anglerfish_large.png",
+    }
 
     ENEMY_COLORS = {
         "burwor": NEON_BLUE,
@@ -777,102 +1272,85 @@ class Enemy(Entity):
         "wizard": 2500,
     }
 
+    ENEMY_SCALES = {
+        "burwor": 0.6,
+        "garwor": 0.7,
+        "thorwor": 0.8,
+        "worluk": 0.75,
+        "wizard": 0.9,
+    }
+
     def __init__(self, grid_x, grid_y, enemy_type="burwor", **kwargs):
         self.enemy_type = enemy_type
-        enemy_color = self.ENEMY_COLORS.get(enemy_type, NEON_BLUE)
+        self.enemy_color = self.ENEMY_COLORS.get(enemy_type, NEON_BLUE)
+
+        # Choose texture for enemy type
+        texture_path = self.ENEMY_TEXTURES.get(
+            enemy_type, self.ENEMY_TEXTURES["burwor"]
+        )
+
+        base_scale = self.ENEMY_SCALES.get(enemy_type, 0.6)
 
         super().__init__(
-            model="cube",
-            scale=(0.5, 0.7, 0.5),
+            model="quad",
+            texture=texture_path,
+            color=color.white,  # Use white to show texture properly
+            scale=(base_scale, base_scale),
             position=(grid_x * TILE_SIZE, 0.35, grid_y * TILE_SIZE),
-            color=enemy_color,
+            unlit=True,
+            double_sided=True,
+            billboard=True,
             **kwargs,
         )
 
         self.grid_x = grid_x
         self.grid_y = grid_y
+        self.base_scale = base_scale
         self.speed = self.ENEMY_SPEEDS.get(enemy_type, 0.03)
         self.points = self.ENEMY_POINTS.get(enemy_type, 100)
         self.direction = random.choice([(1, 0), (-1, 0), (0, 1), (0, -1)])
         self.move_timer = 0
         self.visible = True
         self.health = 3 if enemy_type == "wizard" else 1
+        self.bubble_cooldown = 0  # Timer for bubble trail spawning
+        self.facing = 1  # 1 = right, -1 = left
 
-        # Visual elements
-        self._create_visuals(enemy_color)
+        # Create shadow
+        self._create_shadow()
 
-    def _create_visuals(self, base_color):
-        """Create enemy-specific visual elements."""
-        # Eyes
-        eye_color = NEON_RED if self.enemy_type != "wizard" else NEON_CYAN
-
-        self.left_eye = Entity(
-            parent=self,
-            model="sphere",
-            scale=0.15,
-            position=(-0.15, 0.2, 0.25),
-            color=eye_color,
+    def _create_shadow(self):
+        """Create a shadow beneath the enemy."""
+        self.shadow = Entity(
+            model="quad",
+            texture="circle",
+            color=color.black66,
+            rotation_x=90,
+            scale=(self.base_scale * 0.8, self.base_scale * 0.4),
+            position=(self.x, 0.02, self.z),
             unlit=True,
+            double_sided=True,
         )
-
-        self.right_eye = Entity(
-            parent=self,
-            model="sphere",
-            scale=0.15,
-            position=(0.15, 0.2, 0.25),
-            color=eye_color,
-            unlit=True,
-        )
-
-        # Type-specific features
-        if self.enemy_type == "thorwor":
-            # Stinger tail
-            self.tail = Entity(
-                parent=self,
-                model="cube",
-                scale=(0.1, 0.1, 0.4),
-                position=(0, 0.4, -0.3),
-                rotation=(30, 0, 0),
-                color=NEON_YELLOW,
-            )
-
-        elif self.enemy_type == "wizard":
-            # Staff
-            self.staff = Entity(
-                parent=self,
-                model="cube",
-                scale=(0.08, 0.8, 0.08),
-                position=(0.35, 0, 0),
-                color=NEON_PURPLE,
-            )
-            # Orb
-            self.orb = Entity(
-                parent=self,
-                model="sphere",
-                scale=0.12,
-                position=(0.35, 0.45, 0),
-                color=NEON_CYAN,
-                unlit=True,
-            )
 
     def update(self):
-        # Animation
+        # Gentle bobbing animation for swimming effect
         anim_time = time.time()
-        eye_pulse = 1 + math.sin(anim_time * 5) * 0.2
-        self.left_eye.scale = Vec3(0.15 * eye_pulse, 0.15 * eye_pulse, 0.15 * eye_pulse)
-        self.right_eye.scale = Vec3(
-            0.15 * eye_pulse, 0.15 * eye_pulse, 0.15 * eye_pulse
-        )
+        bob = math.sin(anim_time * 3 + hash(str(self.grid_x) + str(self.grid_y))) * 0.03
+        self.y = 0.35 + bob
 
-        # Garwor cloaking
+        # Garwor cloaking (jellyfish becomes translucent)
         if self.enemy_type == "garwor":
             if random.random() < 0.003:
+                was_visible = self.visible
                 self.visible = not self.visible
-                self.alpha = 0.2 if not self.visible else 1
+                self.alpha = 0.3 if not self.visible else 0.9
+                # Play sound when becoming visible (like original WoW)
+                if self.visible and not was_visible and sound_manager:
+                    sound_manager.play("enemy_visible", 0.3)
 
-        # Wizard orb animation
-        if self.enemy_type == "wizard" and hasattr(self, "orb"):
-            self.orb.scale = 0.12 + math.sin(anim_time * 4) * 0.03
+        # Wizard pulsing glow and teleport
+        if self.enemy_type == "wizard":
+            pulse = 0.85 + math.sin(anim_time * 4) * 0.15
+            self.scale = Vec3(self.base_scale * pulse, self.base_scale * pulse, 1)
 
         # AI Movement
         self.move_timer += time.dt
@@ -907,15 +1385,29 @@ class Enemy(Entity):
         self.x = self.grid_x * TILE_SIZE
         self.z = self.grid_y * TILE_SIZE
 
-        # Face movement direction
-        if self.direction[0] > 0:
-            self.rotation_y = -90
-        elif self.direction[0] < 0:
-            self.rotation_y = 90
-        elif self.direction[1] > 0:
-            self.rotation_y = 180
-        elif self.direction[1] < 0:
-            self.rotation_y = 0
+        # Flip sprite horizontally based on movement direction
+        if self.direction[0] != 0:
+            new_facing = 1 if self.direction[0] > 0 else -1
+            if new_facing != self.facing:
+                self.facing = new_facing
+                self.scale_x = abs(self.scale_x) * self.facing
+
+        # Update shadow position
+        if hasattr(self, "shadow"):
+            self.shadow.x = self.x
+            self.shadow.z = self.z
+
+        # Spawn bubble trail behind the enemy
+        self.bubble_cooldown -= time.dt
+        if self.bubble_cooldown <= 0:
+            # Spawn bubble slightly behind the enemy
+            spawn_pos = Vec3(
+                self.x - self.direction[0] * 0.3,
+                self.y + 0.1,
+                self.z - self.direction[1] * 0.3,
+            )
+            TrailBubble(position=spawn_pos)
+            self.bubble_cooldown = random.uniform(0.1, 0.25)
 
     def take_damage(self):
         """Handle taking damage. Returns True if enemy dies."""
@@ -930,12 +1422,14 @@ class Enemy(Entity):
 
     def die(self):
         """Handle death with particles."""
+        # Death particles using enemy color
+        particle_color = self.ENEMY_COLORS.get(self.enemy_type, NEON_BLUE)
         for _ in range(15):
             particle = Entity(
                 model="sphere",
                 scale=0.1,
                 position=self.position,
-                color=self.color,
+                color=particle_color,
                 unlit=True,
             )
             particle.animate_position(
@@ -948,6 +1442,10 @@ class Enemy(Entity):
             )
             particle.animate_scale(0, duration=0.5)
             destroy(particle, delay=0.5)
+
+        # Destroy shadow
+        if hasattr(self, "shadow") and self.shadow:
+            destroy(self.shadow)
 
         destroy(self)
 
@@ -964,7 +1462,7 @@ class HUD(Entity):
         # Score
         self.score_text = Text(
             text="SCORE: 0",
-            position=(-0.85, 0.45),
+            position=(-0.78, 0.45),
             scale=1.5,
             color=NEON_YELLOW,
         )
@@ -972,7 +1470,7 @@ class HUD(Entity):
         # Lives
         self.lives_text = Text(
             text="LIVES: 3",
-            position=(-0.85, 0.40),
+            position=(-0.78, 0.40),
             scale=1.5,
             color=NEON_GREEN,
         )
@@ -980,7 +1478,7 @@ class HUD(Entity):
         # Enemies
         self.enemies_text = Text(
             text="ENEMIES: 0",
-            position=(0.55, 0.45),
+            position=(0.45, 0.45),
             scale=1.5,
             color=NEON_RED,
         )
@@ -988,7 +1486,7 @@ class HUD(Entity):
         # Phase
         self.phase_text = Text(
             text="PHASE: NORMAL",
-            position=(0.55, 0.40),
+            position=(0.45, 0.40),
             scale=1.5,
             color=NEON_PURPLE,
         )
@@ -1011,6 +1509,14 @@ class HUD(Entity):
             color=NEON_CYAN,
         )
         self.message_timer = 0
+
+        # Debug overlay (movement + grid info)
+        self.debug_text = Text(
+            text="",
+            position=(-0.78, -0.35),
+            scale=0.9,
+            color=NEON_CYAN,
+        )
 
     def update_score(self, score):
         self.score_text.text = f"SCORE: {score}"
@@ -1039,6 +1545,32 @@ class HUD(Entity):
             if self.message_timer <= 0:
                 self.message_text.text = ""
 
+    def update_debug(self, player, input_x, input_z):
+        grid_x = int(player.grid_x + 0.5)
+        grid_y = int(player.grid_y + 0.5)
+        tile = "out"
+        if 0 <= grid_x < MAZE_WIDTH and 0 <= grid_y < MAZE_HEIGHT:
+            tile = "wall" if MAZE[grid_y][grid_x] == 1 else "open"
+
+        keys = []
+        if held_keys["w"] or held_keys["up arrow"]:
+            keys.append("W/Up")
+        if held_keys["s"] or held_keys["down arrow"]:
+            keys.append("S/Down")
+        if held_keys["a"] or held_keys["left arrow"]:
+            keys.append("A/Left")
+        if held_keys["d"] or held_keys["right arrow"]:
+            keys.append("D/Right")
+        if held_keys["shift"]:
+            keys.append("Shift")
+        key_text = ", ".join(keys) if keys else "none"
+
+        self.debug_text.text = (
+            f"Pos: ({player.grid_x:.2f}, {player.grid_y:.2f})\n"
+            f"Grid: ({grid_x}, {grid_y}) {tile}\n"
+            f"Input: ({input_x}, {input_z}) Keys: {key_text}"
+        )
+
 
 # =============================================================================
 # GAME MANAGER
@@ -1048,6 +1580,11 @@ class GameManager(Entity):
 
     def __init__(self):
         super().__init__()
+
+        # Initialize sound manager
+        global sound_manager
+        if sound_manager is None:
+            sound_manager = SoundManager()
 
         self.game_over = False
         self.victory = False
@@ -1060,14 +1597,15 @@ class GameManager(Entity):
         # Setup camera
         self.iso_camera = IsometricCamera()
 
-        # Find spawn position
-        spawn_pos = None
-        for pos in reversed(self.valid_positions):
-            if pos[1] > MAZE_HEIGHT - 4:
-                spawn_pos = pos
-                break
-        if not spawn_pos:
-            spawn_pos = self.valid_positions[-1]
+        # Find spawn position (prefer interior tiles so the sprite isn't jammed against walls)
+        spawn_candidates = self.maze_builder.interior_positions or self.valid_positions
+        bottom_candidates = [
+            pos for pos in spawn_candidates if pos[1] > MAZE_HEIGHT - 4
+        ]
+        if bottom_candidates:
+            spawn_pos = random.choice(bottom_candidates)
+        else:
+            spawn_pos = spawn_candidates[-1]
 
         self.player_spawn = spawn_pos
         self.player = Player(spawn_pos[0] + 0.5, spawn_pos[1] + 0.5)
@@ -1087,6 +1625,12 @@ class GameManager(Entity):
 
         # Setup lighting
         self.setup_lighting()
+
+        # Play sounds like original Wizard of Wor
+        if sound_manager:
+            sound_manager.play("voice_welcome")  # "Welcome to the Dungeon of Wor!"
+            invoke(lambda: sound_manager.play("player_enters"), delay=0.5)
+            invoke(lambda: sound_manager.play_music("loop01", 0.2), delay=2.0)
 
     def setup_lighting(self):
         """Setup atmospheric lighting."""
@@ -1120,18 +1664,28 @@ class GameManager(Entity):
                     pos = random.choice(self.valid_positions)
                 enemy = Enemy(pos[0] + 0.5, pos[1] + 0.5, enemy_type)
                 self.enemies.append(enemy)
+            # Store max enemies for tempo tracking
+            self.max_enemies = len(self.enemies)
 
         elif self.phase == "worluk":
             pos = random.choice(self.valid_positions)
             enemy = Enemy(pos[0] + 0.5, pos[1] + 0.5, "worluk")
             self.enemies.append(enemy)
+            self.max_enemies = 1
             self.hud.show_message("THE WORLUK APPEARS!", 3)
+            if sound_manager:
+                sound_manager.play("worluk")
+                sound_manager.play_music("loop04", 0.25)  # Fast tempo for worluk
 
         elif self.phase == "wizard":
             pos = random.choice(self.valid_positions)
             enemy = Enemy(pos[0] + 0.5, pos[1] + 0.5, "wizard")
             self.enemies.append(enemy)
+            self.max_enemies = 1
             self.hud.show_message("I AM THE WIZARD OF WOR!", 3)
+            if sound_manager:
+                sound_manager.play("voice_wizard")  # Classic "I am the Wizard of Wor!"
+                sound_manager.play_music("loop05", 0.25)  # Fastest tempo for wizard
 
         self.hud.update_enemies(len(self.enemies))
 
@@ -1140,6 +1694,8 @@ class GameManager(Entity):
             if key == "r":
                 # Restart game
                 scene.clear()
+                if sound_manager:
+                    sound_manager.stop_music()
                 self.__init__()
             return
 
@@ -1148,6 +1704,7 @@ class GameManager(Entity):
 
         # Shooting
         if key == "space" and self.player.shoot_cooldown <= 0:
+            self._spawn_water_burst()
             bullet = Bullet(
                 self.player.grid_x,
                 self.player.grid_y,
@@ -1156,6 +1713,24 @@ class GameManager(Entity):
             )
             self.bullets.append(bullet)
             self.player.shoot_cooldown = 15
+            if sound_manager:
+                sound_manager.play("player_fire", 0.4)
+
+    def _spawn_water_burst(self):
+        if not self.player:
+            return
+        direction = Vec3(self.player.direction[0], 0, self.player.direction[1])
+        if direction.length() == 0:
+            direction = Vec3(1, 0, 0)
+        direction = direction.normalized()
+        origin = Vec3(self.player.x, 0.45, self.player.z) + direction * 0.4
+        for _ in range(8):
+            offset = Vec3(
+                random.uniform(-0.12, 0.12),
+                random.uniform(-0.05, 0.08),
+                random.uniform(-0.12, 0.12),
+            )
+            TrailBubble(position=origin + offset)
 
     def update(self):
         if self.game_over or self.victory:
@@ -1164,13 +1739,13 @@ class GameManager(Entity):
         # Handle player input - CAMERA-RELATIVE movement
         # Get raw input direction
         input_x, input_z = 0, 0
-        if held_keys["left"] or held_keys["a"]:
+        if held_keys["left arrow"] or held_keys["left"] or held_keys["a"]:
             input_x = -1
-        elif held_keys["right"] or held_keys["d"]:
+        elif held_keys["right arrow"] or held_keys["right"] or held_keys["d"]:
             input_x = 1
-        if held_keys["up"] or held_keys["w"]:
+        if held_keys["up arrow"] or held_keys["up"] or held_keys["w"]:
             input_z = 1  # Forward relative to camera
-        elif held_keys["down"] or held_keys["s"]:
+        elif held_keys["down arrow"] or held_keys["down"] or held_keys["s"]:
             input_z = -1  # Backward relative to camera
 
         # Transform input to world-space using camera orientation
@@ -1191,6 +1766,7 @@ class GameManager(Entity):
                 dy = 1 if world_dir_z > 0 else -1
 
         self.player.move(dx, dy)
+        self.hud.update_debug(self.player, input_x, input_z)
 
         # Update HUD
         self.hud.update_score(self.player.score)
@@ -1217,6 +1793,14 @@ class GameManager(Entity):
                     if dist < 0.8:
                         if enemy.take_damage():
                             self.player.score += enemy.points
+                            # Play appropriate death sound
+                            if sound_manager:
+                                if enemy.enemy_type == "wizard":
+                                    sound_manager.play("wizard_dead")
+                                elif enemy.enemy_type == "worluk":
+                                    sound_manager.play("worluk_dead")
+                                else:
+                                    sound_manager.play("enemy_dead")
                             enemy.die()
                             self.enemies.remove(enemy)
                             self.hud.update_enemies(len(self.enemies))
@@ -1237,22 +1821,49 @@ class GameManager(Entity):
                 self.player_hit()
                 break
 
+        # Update music tempo based on remaining enemies (like original WoW)
+        if sound_manager and self.phase == "normal" and hasattr(self, "max_enemies"):
+            sound_manager.update_music_tempo(len(self.enemies), self.max_enemies)
+
+        # Radar blip for nearby enemies (invisible garwor detection)
+        if sound_manager and self.enemies:
+            closest_dist = float("inf")
+            for enemy in self.enemies:
+                if enemy:
+                    dist = math.sqrt(
+                        (self.player.grid_x - enemy.grid_x) ** 2
+                        + (self.player.grid_y - enemy.grid_y) ** 2
+                    )
+                    if dist < closest_dist:
+                        closest_dist = dist
+            # Play radar blip for close enemies
+            if closest_dist < 8:
+                sound_manager.play_radar_blip(closest_dist, time.time())
+
         # Phase progression
         if len(self.enemies) == 0:
             if self.phase == "normal":
                 self.phase = "worluk"
+                if sound_manager:
+                    sound_manager.play("maze_exit")  # Level clear sound
                 invoke(self.spawn_enemies, delay=1)
             elif self.phase == "worluk":
                 self.phase = "wizard"
                 invoke(self.spawn_enemies, delay=1)
             elif self.phase == "wizard":
                 self.victory = True
+                if sound_manager:
+                    sound_manager.play("laugh")  # Victory laugh
                 self.show_end_screen()
 
     def player_hit(self):
         """Handle player getting hit."""
         self.player.lives -= 1
         self.hud.update_lives(self.player.lives)
+
+        # Play player death sound
+        if sound_manager:
+            sound_manager.play("player_dead")
 
         # Flash effect
         flash = Entity(
@@ -1275,9 +1886,22 @@ class GameManager(Entity):
             self.player.x = self.player.grid_x * TILE_SIZE
             self.player.z = self.player.grid_y * TILE_SIZE
             self.hud.show_message("PREPARE YOURSELF!", 2)
+            if sound_manager:
+                sound_manager.play("voice_prepare")  # "Prepare yourself!" voice
 
     def show_end_screen(self):
         """Show game over or victory screen."""
+        # Stop music and play end sound
+        if sound_manager:
+            sound_manager.stop_music()
+            if self.game_over:
+                sound_manager.play("game_over")
+                invoke(
+                    lambda: sound_manager.play("voice_game_over"), delay=0.5
+                )  # Voice "Game Over"
+            else:
+                sound_manager.play("double_score")
+
         # Overlay
         overlay = Entity(
             parent=camera.ui,

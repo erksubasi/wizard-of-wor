@@ -5,7 +5,7 @@ description = "Wizard of Wor - Classic arcade game clone with 2D neon, 3D first-
 authors = [
     {name = "erksubasi", email = "erksubasi@gmail.com"},
 ]
-dependencies = ["pygame>=2.6.1", "numpy>=2.4.0", "ursina>=7.0.0"]
+dependencies = ["pygame>=2.6.1", "numpy>=2.4.0", "ursina>=7.0.0", "scipy>=1.16.3"]
 requires-python = "==3.11.*"
 readme = "README.md"
 license = {text = "MIT"}
